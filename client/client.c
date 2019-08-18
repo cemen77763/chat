@@ -12,8 +12,17 @@
 #include <pthread.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
+#include <string.h>
 
 int USERS_NUM = 0;
+int COL = 1;
+
+struct msgbuf_chat{
+	long mtype;
+	long num;
+	char user_name[30];
+	char message[255];
+};
 
 struct msgbuf_user{
 	long mtype;
@@ -23,6 +32,7 @@ struct msgbuf_user{
 
 struct pdata{
 	struct msgbuf_user user;
+	struct msgbuf_chat chat;
 	WINDOW *win;
 	int id;
 };
@@ -32,6 +42,10 @@ void sig_winch(int signo);
 void menu(WINDOW *usersWin, WINDOW *chatWin);
 
 void *usersnum(void *pthread_data);
+
+void takemess(char *buff);
+
+void *usersmes(void *pthread_data);
 
 void takename(WINDOW *chatWin, char *name);
 
@@ -51,6 +65,7 @@ void main(){
 	init_pair(1, COLOR_WHITE, COLOR_BLUE);
 	init_pair(2, COLOR_WHITE, COLOR_BLACK);
 	init_pair(3, COLOR_GREEN, COLOR_BLACK);
+	init_pair(4, COLOR_YELLOW, COLOR_BLUE);
 
 	chatWin = newwin(20, 50, 0, 0);
 	usersWin = newwin(20, 80, 0, 50);
@@ -73,7 +88,7 @@ void menu(WINDOW *usersWin, WINDOW *chatWin){
 	move(20,0);      
     hline(ACS_CKBOARD,100); 
     move(21, 0);
-    printw("Enter to send message");
+    printw("Esc to quit");
 	refresh();
 
 	wbkgd(chatWin, COLOR_PAIR(1));
@@ -88,6 +103,11 @@ void menu(WINDOW *usersWin, WINDOW *chatWin){
 	wmove(usersWin, 0, 1);
 	wattron(usersWin, COLOR_PAIR(2));
 	wprintw(usersWin, "Users:");
+
+	wmove(chatWin, 18, 1);
+	wattron(chatWin, COLOR_PAIR(4));
+	wprintw(chatWin, "Enter message: ");
+	wattron(chatWin, COLOR_PAIR(1));
 
 	wrefresh(chatWin);
 	wrefresh(usersWin);
@@ -162,26 +182,119 @@ void *usersnum(void *pthread_data){
 	pthread_exit(EXIT_SUCCESS);
 }
 
+void takemess(char *buff){
+	int i = 0;
+	while((buff[i] != ' ') && (buff[i] != '|'))
+		i++;
+	buff[i + 1] = '\0';
+}
+
+void *usersmes(void *pthread_data){
+	int working = 1;
+	struct pdata *data = (struct pdata*)pthread_data;
+	struct msgbuf_chat chat;
+
+	while(working){
+		msgrcv(data->id, &(chat), sizeof(struct msgbuf_chat), data->chat.num, 0);
+		wmove(data->win, COL, 1);
+		wprintw(data->win, "%s: %s", chat.user_name, chat.message);
+		wrefresh(data->win);
+		COL++;
+	}
+
+
+	pthread_exit(EXIT_SUCCESS);
+}
+
 void client(WINDOW *chatWin, WINDOW *usersWin){
-	key_t key1;
+	key_t key1, key2;
 	int working = 1, user_id;
-	int ch;
-	pthread_t tid;
-	struct pdata data;
+	int ch, i = 0, j = 0;
+	char buff[255];
+	pthread_t tid[2];
+	struct pdata data[2];
 
 	key1 = 1234;
-	data.id = msgget(key1, IPC_CREAT | 00666);
+	key2 = 1233;
+	data[0].id = msgget(key1, IPC_CREAT | 00666);
+	data[1].id = msgget(key2, IPC_CREAT | 00666);
 
-	data.win = usersWin;
+	data[0].win = usersWin;
+	data[1].win = chatWin;
 
-	takename(chatWin, data.user.user_name);
+	takename(chatWin, data[0].user.user_name);
+	do {
+		data[1].chat.user_name[i] = data[0].user.user_name[i];
+		i++;
+	} while (data[0].user.user_name[i] != '\0');
+	data[1].chat.user_name[i] = '\0';
+
 	wclear(chatWin);
 	menu(usersWin, chatWin);
 
-	pthread_create(&(tid), NULL, usersnum, &(data));
+	pthread_create(&(tid[0]), NULL, usersnum, &(data[0]));
 
-	while(ch != 10){
+	data[1].chat.mtype = 1;
+	msgsnd(data[1].id, &(data[1].chat), sizeof(struct msgbuf_chat), 0);
+	msgrcv(data[1].id, &(data[1].chat), sizeof(struct msgbuf_chat), 2, 0);
+	pthread_create(&(tid[1]), NULL, usersmes, &(data[1]));
+
+	i = 0;
+	while(working){
+		if (COL >= 17){
+			wclear(chatWin);
+			menu(usersWin, chatWin);
+			i = 0;
+			COL = 1;
+		}
 		ch = getch();
+		switch(ch){
+			case 10:{
+				wmove(chatWin, 18, 16);
+				winstr(chatWin, buff);
+
+				j = 0;
+				do {
+					data[1].chat.message[j] = buff[j];
+					j++;
+				} while(buff[j + 1] != '|');
+				data[1].chat.message[j] = '\0';
+
+				i = 16;
+				wmove(chatWin, 18, i);
+				winstr(chatWin, buff);
+				while(buff[0] != '|'){
+					mvwaddstr(chatWin, 18, i, " ");
+					i++;
+					wmove(chatWin, 18, i);
+					winstr(chatWin, buff);
+				}
+				i = 0;
+
+				data[1].chat.mtype = 3;
+				msgsnd(data[1].id, &(data[1].chat), sizeof(struct msgbuf_chat), 0);
+				break;
+			}
+			case 27:{
+				working = 0;
+				break;
+			}
+			case KEY_BACKSPACE:
+			{
+				i--;
+				mvwaddstr(chatWin, 18, 16 + i, " ");
+				wmove(chatWin, 18, 16 + i);
+				wrefresh(chatWin);
+				break;
+			}
+			default:{
+				wmove(chatWin, 18, 16 + i);
+				mvwaddch(chatWin, 18, 16 + i, ch);
+				wrefresh(chatWin);
+				i++;
+				break;
+			}
+		}
 	}
-	pthread_cancel(tid);
+	pthread_cancel(tid[0]); pthread_cancel(tid[1]);
 }
