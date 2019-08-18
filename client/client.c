@@ -195,6 +195,15 @@ void *usersmes(void *pthread_data){
 	struct msgbuf_chat chat;
 
 	while(working){
+		if (COL >= 17){
+			wclear(data->win);
+			box(data->win, '|', '-');
+			wmove(data->win, 18, 1);
+			wattron(data->win, COLOR_PAIR(4));
+			wprintw(data->win, "Enter message: ");
+			wattron(data->win, COLOR_PAIR(1));
+			COL = 1;
+		}
 		msgrcv(data->id, &(chat), sizeof(struct msgbuf_chat), data->chat.num, 0);
 		wmove(data->win, COL, 1);
 		wprintw(data->win, "%s: %s", chat.user_name, chat.message);
